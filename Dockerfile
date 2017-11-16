@@ -1,4 +1,4 @@
-FROM python:3.4-alpine
+FROM python:2.7
 
 RUN mkdir /src
 
@@ -7,4 +7,6 @@ WORKDIR /src
 # Copy the rest of the files to the container workdir
 COPY . /src
 
-CMD server.sh
+EXPOSE 7070
+
+ENTRYPOINT ["/src/server.sh"]
