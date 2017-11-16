@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+<html>
+<meta charset="utf-8">
+<title>Sankey Diagram</title>
+<style>
+ 
+@import url(http://fonts.googleapis.com/css?family=PT+Serif|PT+Serif:b|PT+Serif:i|PT+Sans|PT+Sans:b);
+ 
+#chart {
+  height: 500px;
+  float:left;
+}
+ 
+.node rect {
+  cursor: pointer;
+  fill-opacity: .9;
+  /*shape-rendering: crispEdges;*/
+}
+ 
+.node text {
+  pointer-events: none;
+  text-shadow: 0 1px 0 #fff;
+}
+ 
+/*.link {
+  fill: none;
+  stroke: #000;
+  stroke-opacity: .2;
+}
+ 
+.link:hover {
+  stroke-opacity: .5 !important;
+}
+*/
+button{margin:10px;}
+
+#headers{border-spacing:0px;}
+
+#headers th {text-align:left;}
+
+.filterTable{border:solid black 1px;float:left;margin:5px;}
+
+svg{cursor:move;}
+canvas {
+  position: absolute;
+}
+svg {
+  position: absolute;
+  border:solid 1px black;
+}
+
+#contentWrap{width:100px;}
+ 
+</style>
+<body>
+  <div id="contentWrap">
+  <div class="tableWrap">
+  <table class="filterTable">
+    <tr><th colspan="2">Source filters</th></tr>
+    <tr><td><label>Access</label></td><td><select xPos=4 class="filter resettable" id="access"></select></td></tr>
+    <tr><td><label>Latest</label></td><td><select xPos=4 class="filter resettable" id="latest"></select></td></tr>
+    <tr><td><label>Owner</label></td><td><select xPos=4 class="filter resettable" id="owner"></select></td></tr>
+    <tr><td><label>Statistical sector</label></td><td><select xPos=4 class="filter resettable" id="statisticalSector"></select></td></tr>
+    <tr><td><label>Geographic coverage</label></td><td><select xPos=4 class="filter resettable" id="geographicCoverage"></select></td></tr>
+    <tr><td><label>Sample size</label></td><td><select xPos=4 class="filter resettable" id="sampleSize"></select></td></tr>
+    <tr><td><label>Source type</label></td><td><select xPos=4 class="filter resettable" id="sourceType"></select></td></tr>
+  </table>
+  <table class="filterTable">
+    <tr><th colspan="2">Text filter</th></tr>
+    <tr>
+      <td><input type="text" class="filter resettable" id="textFilter"></input></td>
+      <td>
+        <select class="filter" id="xPosTextFilter">
+          <option value=0>Indicator framework</option>
+          <option value=1>Goal</option>
+          <option value=2>Indicator</option>
+          <option value=3>Data series</option>
+          <option value=4>Source</option>
+        </select>
+      </td>
+    </tr>
+    </table>
+  <table class="filterTable">
+    <tr><th colspan="2">Data series filters</th></tr>
+    <tr><td><label>Questionnaire</label></td><td><select xPos=3 class="filter resettable" id="questionnaire"></select></td></tr>
+    <tr><td><label>Age disaggregation</label></td><td><select xPos=3 class="filter resettable" id="disaggregationAge"></select></td></tr>
+    <tr><td><label>Location disaggregation</label></td><td><select xPos=3 class="filter resettable" id="disaggregationLocation"></select></td></tr>
+  </table>
+  </div>
+
+<div id="chart"><canvas></canvas><svg></svg></div>
+</div>
+<button onclick="resetSankey()">Reset</button>
+
+<script src="jquery-3.2.1.min.js"></script>
+<script src="d3.v3.min.js"></script>
+<script src="sankey.js"></script>
+<script src="lodash.min.js"></script>
+<script>
+  
+function findWithAttr(array, attr, value) {
+  for(var i = 0; i < array.length; i += 1) {
+      if(array[i][attr] === value) {
+          return i;
+      }
+  }
+  return -1;
+}
+
+function redirect_to_db(d){
+  var xPosDict = [
+    "https://devinit.knack.com/dda-ug#sdgs/",
+    "https://devinit.knack.com/dda-ug#sdgs/sdg-goals/",
+    "https://devinit.knack.com/dda-ug#sdgs/sdg-indicators/",
+    "https://devinit.knack.com/dda-ug#sdgs/sdg-indicators/",
+    "https://devinit.knack.com/dda-ug#sources/"
+  ];
+  window.location = xPosDict[d.xPos];
+}
+
+var margin = {top: 40, right: 250, bottom: 6, left: 1},
+    width = 1500 - margin.left - margin.right,
+    height = 500 - margin.top - margin.bottom,
+    clearWidth = 1500,
+    clearHeight = 500,
+    min_zoom = 0.5,
+    max_zoom = 14,
+    zoom = d3.behavior.zoom().scaleExtent([min_zoom,max_zoom]),
+    originTransform = [1, 0, 0, 1, 0, 0],
+    transform = [1, 0, 0, 1, margin.left, margin.top],
+    context = d3.select("canvas").node().getContext("2d"),
+    strokeWidth = 1,
+    maxFont = 20,
+    minFont = 5,
+    defaultFont = 12,
+    maxFontHeader = 25,
+    minFontHeader = 8,
+    defaultFontHeader = 15,
+    BGpadding = 5,
+    positions = {};
+    
+$('.tableWrap').width(width + margin.right + margin.left);
+    
+var palette = [
+{"hex":"#e84439","color":"red","number":0},
+{"hex":"#f8c1b2","color":"red","number":1},
+{"hex":"#f0826d","color":"red","number":2},
+{"hex":"#bc2629","color":"red","number":3},
+{"hex":"#8f1b13","color":"red","number":4},
+{"hex":"#fce3dc","color":"red","number":5},
+{"hex":"#fbd7cb","color":"red","number":6},
+{"hex":"#f6b0a0","color":"red","number":7},
+{"hex":"#ec6250","color":"red","number":8},
+{"hex":"#dc372d","color":"red","number":9},
+{"hex":"#cd2b2a","color":"red","number":10},
+{"hex":"#a21e25","color":"red","number":11},
+{"hex":"#6b120a","color":"red","number":12},
+{"hex":"#eb642b","color":"orange","number":0},
+{"hex":"#f6bb9d","color":"orange","number":1},
+{"hex":"#f18e5e","color":"orange","number":2},
+{"hex":"#d85b31","color":"orange","number":3},
+{"hex":"#973915","color":"orange","number":4},
+{"hex":"#fde5d4","color":"orange","number":5},
+{"hex":"#fcdbbf","color":"orange","number":6},
+{"hex":"#facbad","color":"orange","number":7},
+{"hex":"#f3a47c","color":"orange","number":8},
+{"hex":"#ee7644","color":"orange","number":9},
+{"hex":"#cb5730","color":"orange","number":10},
+{"hex":"#ac4622","color":"orange","number":11},
+{"hex":"#7a2e05","color":"orange","number":12},
+{"hex":"#f49b21","color":"yellow","number":0},
+{"hex":"#fccc8e","color":"yellow","number":1},
+{"hex":"#f9b865","color":"yellow","number":2},
+{"hex":"#e48a00","color":"yellow","number":3},
+{"hex":"#a85d00","color":"yellow","number":4},
+{"hex":"#feedd4","color":"yellow","number":5},
+{"hex":"#fee7c1","color":"yellow","number":6},
+{"hex":"#fedcab","color":"yellow","number":7},
+{"hex":"#fac47e","color":"yellow","number":8},
+{"hex":"#f7a838","color":"yellow","number":9},
+{"hex":"#df8000","color":"yellow","number":10},
+{"hex":"#ba6b15","color":"yellow","number":11},
+{"hex":"#7d4712","color":"yellow","number":12},
+{"hex":"#c2135b","color":"pink","number":0},
+{"hex":"#e4819b","color":"pink","number":1},
+{"hex":"#d64278","color":"pink","number":2},
+{"hex":"#ad1257","color":"pink","number":3},
+{"hex":"#7e1850","color":"pink","number":4},
+{"hex":"#f9cdd0","color":"pink","number":5},
+{"hex":"#f6b8c1","color":"pink","number":6},
+{"hex":"#f3a5b6","color":"pink","number":7},
+{"hex":"#e05c86","color":"pink","number":8},
+{"hex":"#d12568","color":"pink","number":9},
+{"hex":"#9f1459","color":"pink","number":10},
+{"hex":"#8d0e56","color":"pink","number":11},
+{"hex":"#65093d","color":"pink","number":12},
+{"hex":"#893f90","color":"purple","number":0},
+{"hex":"#c189bb","color":"purple","number":1},
+{"hex":"#a45ea1","color":"purple","number":2},
+{"hex":"#7b3b89","color":"purple","number":3},
+{"hex":"#551f65","color":"purple","number":4},
+{"hex":"#ebcfe5","color":"purple","number":5},
+{"hex":"#deb5d6","color":"purple","number":6},
+{"hex":"#cb98c4","color":"purple","number":7},
+{"hex":"#af73ae","color":"purple","number":8},
+{"hex":"#994d98","color":"purple","number":9},
+{"hex":"#732c85","color":"purple","number":10},
+{"hex":"#632572","color":"purple","number":11},
+{"hex":"#42184c","color":"purple","number":12},
+{"hex":"#0089cc","color":"blue","number":0},
+{"hex":"#88bae5","color":"blue","number":1},
+{"hex":"#5da3d9","color":"blue","number":2},
+{"hex":"#0071b1","color":"blue","number":3},
+{"hex":"#0c457b","color":"blue","number":4},
+{"hex":"#d3e0f4","color":"blue","number":5},
+{"hex":"#bcd4f0","color":"blue","number":6},
+{"hex":"#a3c7eb","color":"blue","number":7},
+{"hex":"#77adde","color":"blue","number":8},
+{"hex":"#4397d3","color":"blue","number":9},
+{"hex":"#105fa3","color":"blue","number":10},
+{"hex":"#00538e","color":"blue","number":11},
+{"hex":"#0a3a64","color":"blue","number":12},
+{"hex":"#109e68","color":"green","number":0},
+{"hex":"#92cba9","color":"green","number":1},
+{"hex":"#5ab88a","color":"green","number":2},
+{"hex":"#1e8259","color":"green","number":3},
+{"hex":"#16513a","color":"green","number":4},
+{"hex":"#c5e1cb","color":"green","number":5},
+{"hex":"#b1d8bb","color":"green","number":6},
+{"hex":"#a2d1b0","color":"green","number":7},
+{"hex":"#74bf93","color":"green","number":8},
+{"hex":"#3b8c61","color":"green","number":9},
+{"hex":"#00694a","color":"green","number":10},
+{"hex":"#005b3e","color":"green","number":11},
+{"hex":"#07482e","color":"green","number":12},
+{"hex":"#6a6569","color":"grey","number":0},
+{"hex":"#a9a6aa","color":"grey","number":1},
+{"hex":"#847e84","color":"grey","number":2},
+{"hex":"#555053","color":"grey","number":3},
+{"hex":"#443e42","color":"grey","number":4},
+{"hex":"#d9d4da","color":"grey","number":5},
+{"hex":"#cac5cb","color":"grey","number":6},
+{"hex":"#b3b0b7","color":"grey","number":7},
+{"hex":"#b9b5bb","color":"grey","number":8},
+{"hex":"#5a545a","color":"grey","number":9},
+{"hex":"#736e73","color":"grey","number":10},
+{"hex":"#4e484c","color":"grey","number":11},
+{"hex":"#302b2e","color":"grey","number":12}
+],
+paletteMap = [
+  "red",
+  "blue",
+  "orange",
+  "green",
+  "purple"
+];
+var headers = [{"name":"Indicator framework"},{"name":"Goal"},{"name":"Indicator"},{"name":"Data series"},{"name":"Source"}]
+var formatNumber = d3.format(",.0f"),
+    format = function(d) { return formatNumber(d) + " connection(s)"; },
+    formatInput = function(d) { return formatNumber(d) + " input(s)"; },
+    formatOutput = function(d) { return formatNumber(d) + " output(s)"; };
+    color = function(xPos,i){
+      var number = i % 13,
+      colorType = paletteMap[xPos],
+      color = palette.filter(function(d){return d.color==colorType && d.number==number;});
+      return color[0].hex;
+    };
+    
+    
+var formatText = function(s,limit=30){
+  if(s.length>limit){
+    return(s.substring(0,limit)+"...");
+  }else{
+    return(s);
+  }
+};
+
+var svg = d3.select("#chart svg");
+svg
+  .attr("width", width + margin.left + margin.right)
+  .attr("height", height + margin.top + margin.bottom);
+  
+var canvas = d3.select("#chart canvas");
+canvas
+  .attr("width", width + margin.left + margin.right)
+  .attr("height", height + margin.top + margin.bottom);
+  
+var g = svg
+  .append("g")
+  .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+context.setTransform(transform[0],transform[1],transform[2],transform[3],transform[4],transform[5]);
+  
+zoom.on("zoom", function() {
+  var scaleInverse = (1/d3.event.scale);
+  g.attr("transform", "translate(" + (d3.event.translate[0]+margin.left) +","+ (d3.event.translate[1]+margin.top) + ")scale(" + d3.event.scale + ")");
+  d3.select(".headers")
+  .attr("transform","translate(0,"+(d3.event.translate[1]*scaleInverse*-1)+")");
+  d3.selectAll(".header")
+  .style("font-size",defaultFontHeader*d3.event.scale>maxFontHeader?maxFontHeader*scaleInverse:defaultFontHeader*d3.event.scale<minFontHeader?minFontHeader*scaleInverse:defaultFontHeader)
+  .each(function(d){d.bbox = this.getBBox();});
+  d3.selectAll(".headerBG")
+  .attr("x", function(d){return d.bbox.x - BGpadding;})
+  .attr("y",  function(d){return d.bbox.y - BGpadding;})
+  .attr("width",  function(d){return d.bbox.width + (BGpadding*2);})
+  .attr("height",  function(d){return d.bbox.height + (BGpadding*2);});
+  d3.selectAll(".nodeRect").style("stroke-width",scaleInverse);
+  d3.selectAll(".nodeText")
+  .style("font-size",defaultFont*d3.event.scale>maxFont?maxFont*scaleInverse:defaultFont*d3.event.scale<minFont?minFont*scaleInverse:defaultFont)
+  .text(function(d){return d.name;})
+  .each(function(d){var chars = d.name.length;var textWidth = this.getBBox().width;d.allowedChars = (chars/textWidth)*positions[Object.keys(positions)[1]];})
+  .text(function(d) {return (d.dy*d3.event.scale>15)?formatText(d.name,d.allowedChars-10):""; });
+  
+  transform = [d3.event.scale,0,0,d3.event.scale,d3.event.translate[0]+margin.left,d3.event.translate[1]+margin.top];
+  // Use the identity matrix while clearing the canvas
+  context.setTransform(originTransform[0],originTransform[1],originTransform[2],originTransform[3],originTransform[4],originTransform[5]);
+  context.clearRect(0, 0, clearWidth, clearHeight);
+  //Then set the new transform
+  context.setTransform(transform[0],transform[1],transform[2],transform[3],transform[4],transform[5]);
+
+  context.lineWidth = strokeWidth;
+  context.strokeStyle = "rgba(106,101,105,0.3)";
+
+  sankeyValues.links.forEach(function (d) {
+      context.beginPath();
+      context.moveTo(d.source.x+d.source.dx,d.source.y+(d.source.dy/2));
+      context.lineTo(d.target.x,d.target.y+(d.target.dy/2));
+      context.stroke();
+  });
+  
+});
+    
+svg.call(zoom);
+ 
+var sankey = d3.sankey()
+    .nodeWidth(15)
+    .nodePadding(0)
+    .size([width, height]);
+ 
+var path = sankey.link();
+var originalValues = {};
+var sankeyValues = {"nodes":[],"links":[]};
+var filteredValues = {"nodes":[],"links":[]};
+var linchNodes = [];
+var filterVals = {};
+ 
+d3.csv("nodes.csv", function(nodes) {
+  d3.csv("links.csv",function(links){
+    var uniqueMetas = {};
+    
+    nodes.forEach(function(d){
+      d.xPos = +d.xPos;
+      meta = {},
+      metas = Object.keys(d);
+      for(var i = 0; i < metas.length; i++){
+        var metaKey = metas[i];
+        meta[metaKey] = d[metaKey];
+        if(metaKey != "name" && metaKey!="xPos"){
+          if(!uniqueMetas[metaKey]){
+            uniqueMetas[metaKey] = {};
+          }else{
+            uniqueMetas[metaKey][d[metaKey]] = 1;
+          }
+          delete d[metaKey];
+          }
+        }
+      d.meta = meta;
+      });
+    var metaKeys = Object.keys(uniqueMetas);
+    for(var i = 0; i < metaKeys.length; i++){
+      var metaKey = metaKeys[i],
+      uniqueVals = Object.keys(uniqueMetas[metaKey]);
+      for(var j = 0; j < uniqueVals.length; j++){
+        var uniqueVal = uniqueVals[j],
+        uniqueName = uniqueVal !== "" ? uniqueVal : "None";
+        $("#"+metaKey).append(
+          "<option value='"+uniqueVal+"'>"+uniqueName+"</option>"
+        );
+      }
+    }
+    $('.resettable').val("");
+
+    links.forEach(function(d){
+      var sourceName = d.source,
+      targetName = d.target,
+      newSourceIndex = _.findIndex(nodes,function(node){return node.name == sourceName;}),
+      newTargetIndex = _.findIndex(nodes,function(node){return node.name == targetName;});
+      if(newSourceIndex > -1 && newTargetIndex > -1){
+        var link = {"source":newSourceIndex,"target":newTargetIndex,"value":1};
+        sankeyValues.links.push(link);
+      }
+    }); 
+    
+    sankeyValues.nodes = nodes;
+  
+    //Deep copy, stupidly
+    originalValues.nodes = JSON.parse(JSON.stringify(sankeyValues.nodes));
+    originalValues.links = JSON.parse(JSON.stringify(sankeyValues.links));
+    filteredValues.nodes = JSON.parse(JSON.stringify(sankeyValues.nodes));
+    filteredValues.links = JSON.parse(JSON.stringify(sankeyValues.links));
+    sankey
+        .nodes(sankeyValues.nodes)
+        .links(sankeyValues.links)
+        .layout(32);
+          
+    draw_sankey();
+  });
+  
+});
+
+function reset_data(values){
+  //Deep copy, stupidly
+  sankeyValues.nodes = JSON.parse(JSON.stringify(values.nodes));
+  sankeyValues.links = JSON.parse(JSON.stringify(values.links));
+  filteredValues.nodes = JSON.parse(JSON.stringify(values.nodes));
+  filteredValues.links = JSON.parse(JSON.stringify(values.links));
+  
+  sankey
+      .nodes(sankeyValues.nodes)
+      .links(sankeyValues.links)
+      .layout(32);
+}
+
+function draw_sankey(){
+  d3.select(".links").remove();
+  d3.select(".nodes").remove();
+  d3.select(".headers").remove();
+  
+  var positionsUnique = _.uniqBy(sankeyValues.nodes,function(d){return d.xPos});
+  positions = {};
+  positionsUnique.forEach(function(d){
+    positions[d.xPos] = d.x;
+    });
+  
+  // Use the identity matrix while clearing the canvas
+  context.setTransform(originTransform[0],originTransform[1],originTransform[2],originTransform[3],originTransform[4],originTransform[5]);
+  context.clearRect(0, 0, clearWidth, clearHeight);
+  //Then set the new transform
+  context.setTransform(transform[0],transform[1],transform[2],transform[3],transform[4],transform[5]);
+
+  context.lineWidth = strokeWidth;
+  context.strokeStyle = "rgba(106,101,105,0.3)";
+
+  sankeyValues.links.forEach(function (d) {
+      context.beginPath();
+      context.moveTo(d.source.x+d.source.dx,d.source.y+(d.source.dy/2));
+      context.lineTo(d.target.x,d.target.y+(d.target.dy/2));
+      context.stroke();
+  });
+  
+   var node = g.append("g").attr("class","nodes").selectAll(".node")
+      .data(sankeyValues.nodes)
+    .enter().append("g")
+      .attr("id",function(d){return d.name;})
+      .attr("class", "node")
+      .attr("transform", function(d) { return "translate(" + d.x + "," + d.y + ")"; })
+      .on("click",highlight_node_links)
+      .on("contextmenu", function(d) {
+        d3.event.preventDefault();
+        redirect_to_db(d);
+      });
+      
+  node.append("rect")
+      .attr("class","nodeRect")
+      .attr("height", function(d) { return d.dy; })
+      .attr("width", sankey.nodeWidth())
+      .style("fill", function(d,i) { d.color = color(d.xPos,i); return d.color; })
+      .style("stroke", function(d) { return d3.rgb(d.color).darker(2); })
+    .append("title")
+      .text(function(d) {return d.name + "\n" + formatInput(d.targetLinks.length)+" and "+formatOutput(d.sourceLinks.length); });
+      
+  node.append("text")
+      .attr("class","nodeText")
+      .attr("x", 6 + sankey.nodeWidth())
+      .attr("y", function(d) { return d.dy / 2; })
+      .attr("dy", ".35em")
+      .attr("text-anchor", "start")
+      .attr("transform", null)
+      .style("font-size",defaultFont)
+      .text(function(d){return d.name;})
+      .each(function(d){var chars = d.name.length;var textWidth = this.getBBox().width;d.allowedChars = (chars/textWidth)*positions[Object.keys(positions)[1]];})
+      .text(function(d) {return (d.dy>15)?formatText(d.name,d.allowedChars-10):""; });
+    
+    var header = g.append("g").attr("class","headers")
+    .selectAll(".header")
+    .data(headers)
+    .enter().append("text")
+    .attr("class","header")
+    .attr("x",function(d,i){return positions[i];})
+    .attr("y",-10)
+    .style("font-size",defaultFontHeader)
+    .each(function(d,i){d.visible = Object.keys(positions).indexOf(i.toString())>-1;})
+    .text(function(d){return d.visible?d.name:"";})
+    .each(function(d){d.bbox = this.getBBox();});
+    d3.select(".headers")
+    .selectAll("rect.headerBG")
+    .data(headers)
+    .enter().insert("rect","text.header")
+    .attr("class","headerBG")
+    .attr("fill","white")
+    .attr("x", function(d){return d.bbox.x - BGpadding;})
+    .attr("y",  function(d){return d.bbox.y - BGpadding;})
+    .attr("opacity",function(d){return d.visible?0.8:0;})
+    .attr("width",  function(d){return d.bbox.width + (BGpadding*2);})
+    .attr("height",  function(d){return d.bbox.height + (BGpadding*2);});
+      
+}
+
+//function highlight_node_links(node,i){
+function highlight_node_links(old_node,old_i){
+  var old_name = old_node.name;
+  reset_data(filteredValues);
+  var i = findWithAttr(sankeyValues.nodes,"name",old_name);
+  var node = sankeyValues.nodes[i];
+  
+    var remainingNodes=[],
+        nextNodes=[],
+        uniqueNodeObj={},
+        newNodes = [],
+        newLinks = [];
+  
+    var stroke_opacity = 0;
+    if( d3.select(this).attr("data-clicked") == "1" ){
+      d3.select(this).attr("data-clicked","0");
+      stroke_opacity = 0.2;
+    }else{
+      d3.select(this).attr("data-clicked","1");
+      stroke_opacity = 0.5;
+    }
+  
+    var traverse = [{
+                      linkType : "sourceLinks",
+                      nodeType : "target"
+                    },{
+                      linkType : "targetLinks",
+                      nodeType : "source"
+                    }];
+    
+    uniqueNodeObj[node.name] = 1;
+    var newNode = {"name":node.name,"xPos":node.xPos,"meta":node.meta};
+    newNodes.push(newNode);
+  
+    traverse.forEach(function(step){
+      node[step.linkType].forEach(function(link) {
+        remainingNodes.push(link[step.nodeType]);
+      });
+  
+      while (remainingNodes.length) {
+        nextNodes = [];
+        remainingNodes.forEach(function(node) {
+          if (!uniqueNodeObj[node.name]){
+            uniqueNodeObj[node.name] = 1;
+            var newNode = {"name":node.name,"xPos":node.xPos,"meta":node.meta};
+            newNodes.push(newNode);
+          }
+          node[step.linkType].forEach(function(link) {
+            nextNodes.push(link[step.nodeType]);
+          });
+        });
+        remainingNodes = nextNodes;
+      }
+    });
+    
+    originalValues.links.forEach(function(d){
+      var sourceName = originalValues.nodes[d.source].name,
+      targetName = originalValues.nodes[d.target].name,
+      newSourceIndex = _.findIndex(newNodes,function(node){return node.name == sourceName;}),
+      newTargetIndex = _.findIndex(newNodes,function(node){return node.name == targetName;});
+      if(newSourceIndex > -1 && newTargetIndex > -1){
+        var link = {"source":newSourceIndex,"target":newTargetIndex,"value":d.value};
+        newLinks.push(link);
+      }
+    });
+    
+    sankeyValues.nodes = newNodes;
+    sankeyValues.links = newLinks;
+    
+    sankey
+      .nodes(sankeyValues.nodes)
+      .links(sankeyValues.links)
+      .layout(32);
+                  
+    draw_sankey();
+    
+  }
+
+function highlight_linch_nodes(linchNodes){
+  reset_data(filteredValues);
+  var uniqueNodeObj={},
+        newNodes = [],
+        newLinks = [];
+  
+  for(var k = 0; k < linchNodes.length; k++){
+    var old_name = linchNodes[k].name;
+    var i = findWithAttr(sankeyValues.nodes,"name",old_name);
+    var node = sankeyValues.nodes[i];
+  
+  
+    var remainingNodes=[],
+        nextNodes=[];
+  
+    var traverse = [{
+                      linkType : "sourceLinks",
+                      nodeType : "target"
+                    },{
+                      linkType : "targetLinks",
+                      nodeType : "source"
+                    }];
+    
+    uniqueNodeObj[node.name] = 1;
+    var newNode = {"name":node.name,"xPos":node.xPos,"meta":node.meta};
+    newNodes.push(newNode);
+  
+    traverse.forEach(function(step){
+      node[step.linkType].forEach(function(link) {
+        remainingNodes.push(link[step.nodeType]);
+      });
+  
+      while (remainingNodes.length) {
+        nextNodes = [];
+        remainingNodes.forEach(function(node) {
+          if (!uniqueNodeObj[node.name]){
+            uniqueNodeObj[node.name] = 1;
+            var newNode = {"name":node.name,"xPos":node.xPos,"meta":node.meta};
+            newNodes.push(newNode);
+          }
+          node[step.linkType].forEach(function(link) {
+            nextNodes.push(link[step.nodeType]);
+          });
+        });
+        remainingNodes = nextNodes;
+      }
+    });
+  }
+    
+    originalValues.links.forEach(function(d){
+      var sourceName = originalValues.nodes[d.source].name,
+      targetName = originalValues.nodes[d.target].name,
+      newSourceIndex = _.findIndex(newNodes,function(node){return node.name == sourceName;}),
+      newTargetIndex = _.findIndex(newNodes,function(node){return node.name == targetName;});
+      if(newSourceIndex > -1 && newTargetIndex > -1){
+        var link = {"source":newSourceIndex,"target":newTargetIndex,"value":d.value};
+        newLinks.push(link);
+      }
+    });
+    
+    
+    sankeyValues.nodes = newNodes;
+    sankeyValues.links = newLinks;
+    
+    sankey
+      .nodes(sankeyValues.nodes)
+      .links(sankeyValues.links)
+      .layout(32);
+                  
+    draw_sankey();
+    
+  }
+
+function resetSankey(){
+  $('.resettable').val("");
+  reset_data(originalValues);
+  draw_sankey();                
+}
+
+function filterSankey(filters){
+  var linchNodes = [];
+  
+  filteredValues.nodes = JSON.parse(JSON.stringify(originalValues.nodes));
+  filteredValues.links = [];
+  
+  
+   filteredValues.nodes = filteredValues.nodes.filter(function(d){
+    var neverInXPos = true;
+    var linch = true;
+    for(var i = 0; i < Object.keys(filters).length; i++){
+      var filterKey = Object.keys(filters)[i],
+      newVal = filters[filterKey].newVal,
+      xPos = filters[filterKey].xPos;
+      if(filterKey == "text"){
+        if(d.xPos==xPos){
+          neverInXPos = false;
+          if(d.name.toLowerCase().indexOf(newVal.toLowerCase()) > -1){
+            //Matching XPos and text
+            linch = linch && true;
+          }else{
+            //Matching XPos, unmatching text
+            linch = linch && false;
+          }
+        }
+      }else{
+        if(d.xPos==xPos){
+          neverInXPos = false;
+          if(d.meta[filterKey] == newVal){
+            //Matching XPos and value
+            linch = linch && true;
+          }else{
+            //Matching XPos, unmatching value
+            linch = linch && false;
+          }
+        }
+      }
+    }
+    if(neverInXPos){
+      return(true);
+    }else{
+      if(linch){
+        linchNodes.push(d);
+        return(true);
+      }
+      return(false);
+    }
+    });
+   
+    
+    originalValues.links.forEach(function(d){
+      var sourceName = originalValues.nodes[d.source].name,
+      targetName = originalValues.nodes[d.target].name,
+      newSourceIndex = _.findIndex(filteredValues.nodes,function(node){return node.name == sourceName;}),
+      newTargetIndex = _.findIndex(filteredValues.nodes,function(node){return node.name == targetName;});
+      if(newSourceIndex > -1 && newTargetIndex > -1){
+        var link = {"source":newSourceIndex,"target":newTargetIndex,"value":d.value};
+        filteredValues.links.push(link);
+      }
+    }); 
+
+  //Detect whether links run through linchNodes;
+  highlight_linch_nodes(linchNodes);
+  console.log(sankeyValues);
+}
+
+$(".filter").on("input",function(e){
+  var filterId = $(this).attr("id"),
+  filterObj = {};
+  if(filterId == "xPosTextFilter" || filterId == "textFilter"){
+    var filterVal = $('#textFilter').val();
+    if(filterVal !== ""){
+      filterObj = {"newVal":filterVal,"xPos":parseInt($("#xPosTextFilter").val())};
+      filterVals.text = filterObj;
+    }else{
+      delete filterVals.text;
+    }
+  }else{
+    var filterVal = $(this).val();
+    if(filterVal !== ""){
+      filterObj = {"newVal":filterVal,"xPos":parseInt($(this).attr("xPos"))};
+      filterVals[filterId] = filterObj;
+    }else{
+      delete filterVals[filterId];
+    }
+  }  
+  
+  if(Object.keys(filterVals).length>0){
+    filterSankey(filterVals);
+  }else{
+    resetSankey();
+  }
+    
+  });
+ 
+</script>
+</body>
+</html>
